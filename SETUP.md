@@ -2,11 +2,11 @@
 
 ## Before enabling the schedule
 
-1. Create a GitHub repository named AgentForge under your account and push this project to its default `main` branch. No remote or authenticated GitHub CLI was available during local preparation.
+1. The repository is published at `https://github.com/Retep-dev/agentforge` with the daily schedule disabled. Keep `main` as the default branch.
 2. Create a GitHub App installed **only** on this repository. Grant repository permissions: Contents read/write and Pull requests read/write. Save its App ID as Actions variable `AGENTFORGE_APP_ID` and private key as Actions secret `AGENTFORGE_APP_PRIVATE_KEY`. The daily workflow receives a short-lived installation token. Do not give it Actions, Administration, or Secrets permissions.
 3. Create an OpenAI API key with a project spending cap. Save it as Actions secret `OPENAI_API_KEY`. Set Actions variable `DAILY_BUDGET_USD` (default `$0.06`). The runner stops before a call whose conservative worst-case token charge exceeds the remaining per-run budget. OpenAI account/project limits remain the real billing backstop.
-4. Protect `main`: require the CI `checks` job, require branches to be up to date, disallow force pushes and bypasses, and enable auto-merge. Verify the App can create PRs and request auto-merge under those rules. This is essential: the daily job's local tests are not the required integration check.
-5. Run `Daily bounded development` once manually and verify a PR, CI, and the separate verified integration workflow. Then uncomment the `schedule` block in `.github/workflows/daily.yml` and push. Schedule is approximately 8:15 AM Africa/Lagos; GitHub may delay or occasionally drop scheduled jobs.
+4. In repository Settings → Rules → Rulesets, create an active branch ruleset targeting only `main`: require a pull request before merging, require the CI `checks` status check, require branches to be up to date, block force pushes and deletions, and allow no bypass actors (including the App). Set required human approvals to zero so verified work can merge unattended. If using the older Branches protection page, apply equivalent rules and enable the option that includes administrators. The integration workflow merges only a same-repository Bot PR at the exact commit that passed CI, with at most two allowed source files plus `progress.json`. This is essential: local tests alone do not authorize integration.
+5. Run `Daily bounded development` once manually and verify a PR, CI, and the separate verified integration workflow. Then uncomment the `schedule` block in `.github/workflows/daily.yml` and push. Schedule is approximately 8:15 AM Africa/Lagos; GitHub may delay or occasionally drop scheduled jobs. The schedule remains disabled until this trial succeeds.
 
 ## Expected use and cost
 
@@ -16,7 +16,7 @@
 
 ## Failure and contribution tracking
 
-The runner writes a failure artifact after two bad coding attempts. GitHub's normal failed-workflow notifications should be enabled in your account. Failed work is saved for seven days as a workflow artifact; the next run retries the same task. An open day branch blocks later tasks until integration, so no day silently skips a failed PR.
+The runner writes a failure artifact after two bad coding attempts. The next failed-run retry downloads the latest matching artifact and applies the incomplete patch before trying the same task. The alert workflow opens or updates a repository issue when a daily run fails or an autonomous PR fails CI. Artifacts are retained for seven days. An open day branch blocks later tasks until integration, so no day silently skips a failed PR.
 
 `progress.json` records task completion in the PR and marks contribution status `unverified`. It does not infer a green square from workflow success. Commits identify `AgentForge Automation` and mark the change AI generated. Contributions by an automation/bot identity generally should not be expected to appear as contributions on your personal GitHub profile. Verify any profile credit against GitHub's actual contribution graph and eligibility rules; there is no 90-square guarantee.
 

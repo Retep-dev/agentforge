@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 *.pyc
 coverage/
+.agentforge-recovery/
+failed.patch
+failed-attempt.txt
+.agentforge-completed

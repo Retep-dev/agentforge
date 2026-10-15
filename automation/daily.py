@@ -18,8 +18,13 @@ INPUT_USD_PER_M = 0.75
 OUTPUT_USD_PER_M = 4.50
 
 
-def run(*args, timeout=90):
-    return subprocess.run(args, cwd=ROOT, text=True, capture_output=True, timeout=timeout)
+def run(*args, timeout=90, untrusted=False):
+    environment = os.environ.copy()
+    if untrusted:
+        for name in list(environment):
+            if name.endswith("_TOKEN") or name.endswith("_KEY") or name in ("GH_TOKEN", "GITHUB_TOKEN"):
+                environment.pop(name)
+    return subprocess.run(args, cwd=ROOT, text=True, capture_output=True, timeout=timeout, env=environment)
 
 
 def tasks():
@@ -58,11 +63,11 @@ def apply_edits(files):
 def check(files):
     names = list(files)
     if any(name.startswith("backend/") for name in names):
-        result = run(sys.executable, "-m", "pytest", "-q", "backend/tests", timeout=90)
+        result = run(sys.executable, "-m", "pytest", "-q", "backend/tests", timeout=90, untrusted=True)
         if result.returncode:
             return False, (result.stdout + result.stderr)[-4000:]
     if any(name.startswith("frontend/") for name in names):
-        result = run("npm", "run", "lint", "--prefix", "frontend", timeout=90)
+        result = run("npm", "run", "lint", "--prefix", "frontend", timeout=90, untrusted=True)
         if result.returncode:
             return False, (result.stdout + result.stderr)[-4000:]
     if any(name.startswith("docs/") for name in names):
@@ -79,6 +84,9 @@ def ask_agent(task, feedback, budget):
         "frontend": (ROOT / "frontend/app/page.tsx").read_text(encoding="utf-8")[:4500],
         "feedback": feedback,
     }
+    for name in re.findall(r"`([^`]+)`", task):
+        if allowed_path(name) and (ROOT / name).is_file():
+            context[f"existing:{name}"] = (ROOT / name).read_text(encoding="utf-8")[:4000]
     prompt = json.dumps(context)
     # One UTF-8 character per input token is a deliberately conservative ceiling.
     worst = ((len(prompt) + 1000) * INPUT_USD_PER_M + MAX_OUTPUT_TOKENS * OUTPUT_USD_PER_M) / 1_000_000
@@ -100,6 +108,15 @@ def ask_agent(task, feedback, budget):
     return json.loads(text)["files"], budget - max(actual, 0)
 
 
+def branch_exists(branch):
+    result = run("gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/{branch}")
+    if result.returncode == 0:
+        return True
+    if "404" in result.stderr:
+        return False
+    raise RuntimeError(f"Could not verify remote branch: {result.stderr[-500:]}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--controlled-test", action="store_true", help="Exercise first task without API or commit")
@@ -115,7 +132,7 @@ def main():
         return
     number, description = chosen
     branch = f"codex/day-{number:02d}"
-    if not args.controlled_test and run("gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/{branch}").returncode == 0:
+    if not args.controlled_test and branch_exists(branch):
         print(f"Existing branch {branch}; waiting for PR integration")
         return
     if args.controlled_test:
@@ -127,7 +144,8 @@ def main():
             raise RuntimeError(detail)
         return
     budget = float(os.getenv("DAILY_BUDGET_USD", "0.06"))
-    feedback = ""
+    previous = ROOT / ".agentforge-recovery" / "failed-attempt.txt"
+    feedback = previous.read_text(encoding="utf-8")[-2000:] if previous.exists() else ""
     for attempt in range(1, 3):
         files, budget = ask_agent(description, feedback, budget)
         apply_edits(files)
@@ -137,6 +155,7 @@ def main():
             # Contribution eligibility is verified separately; workflow success is not proof.
             progress["contributions"].append({"date": day, "status": "unverified"})
             (ROOT / "progress.json").write_text(json.dumps(progress, indent=2) + "\n", encoding="utf-8")
+            (ROOT / ".agentforge-completed").write_text(str(number), encoding="utf-8")
             print(f"Completed task {number} on attempt {attempt}")
             return
         print(f"Attempt {attempt} failed: {feedback}", file=sys.stderr)

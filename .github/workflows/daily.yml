@@ -7,6 +7,7 @@ on:
   #     timezone: 'Africa/Lagos'
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: agentforge-daily
   cancel-in-progress: false
@@ -15,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       DAILY_BUDGET_USD: ${{ vars.DAILY_BUDGET_USD || '0.06' }}
     steps:
       - uses: actions/checkout@v4
@@ -41,13 +41,27 @@ jobs:
           private-key: ${{ secrets.AGENTFORGE_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+      - name: Restore the previous failed attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous=$(gh run list --workflow daily.yml --status failure --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [[ "$previous" =~ ^[0-9]+$ ]]; then
+            mkdir -p .agentforge-recovery
+            gh run download "$previous" --name failed-agent-attempt --dir .agentforge-recovery || true
+            task_id=$(python -c 'import json,sys; sys.path.insert(0,"automation"); from daily import select_task; print(select_task(json.load(open("progress.json")))[0])')
+            if [ -s .agentforge-recovery/failed.patch ] && grep -q "^Task $task_id:" .agentforge-recovery/failed-attempt.txt; then
+              git apply --check .agentforge-recovery/failed.patch && git apply .agentforge-recovery/failed.patch || echo 'Previous patch no longer applies; retained in artifact.'
+            fi
+          fi
       - name: Run exactly one bounded task
         env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           python automation/daily.py
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then exit 0; fi
-          task_id=$(python -c 'import json; print(json.load(open("progress.json"))["completed"][-1]["id"])')
+          if [ ! -f .agentforge-completed ]; then exit 0; fi
+          task_id=$(cat .agentforge-completed)
           branch=$(printf 'codex/day-%02d' "$task_id")
           git config user.name 'AgentForge Automation'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -58,13 +72,15 @@ jobs:
           gh pr create --head "$branch" --base main --title "AgentForge day $task_id" --body "AI-generated change by AgentForge Automation. One roadmap task; targeted checks passed. Full CI and branch protection gate integration. Contribution credit remains unverified."
       - name: Save incomplete work for next run
         if: failure()
+        run: |
+          git add -N backend/app backend/tests frontend/app docs || true
+          git diff --binary -- backend/app backend/tests frontend/app docs > failed.patch
+      - name: Upload incomplete work
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: failed-agent-attempt
           path: |
+            failed.patch
             failed-attempt.txt
-            backend/app/
-            backend/tests/
-            frontend/app/
-            docs/
           retention-days: 7

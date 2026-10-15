@@ -35,6 +35,7 @@ jobs:
           assert pr['state'] == 'open'
           assert pr['user']['type'] == 'Bot'
           assert pr['head']['repo']['full_name'] == pr['base']['repo']['full_name']
+          assert pr['head']['sha'] == '${{ github.event.workflow_run.head_sha }}'
           assert pr['base']['ref'] == 'main'
           assert re.fullmatch(r'codex/day-\d{2}', pr['head']['ref'])
           assert pr['title'] == f"AgentForge day {int(pr['head']['ref'][-2:])}"

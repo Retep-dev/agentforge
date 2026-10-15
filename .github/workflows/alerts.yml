@@ -1,0 +1,28 @@
+name: Autonomous run alerts
+on:
+  workflow_run:
+    workflows: [Daily bounded development, CI]
+    types: [completed]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  alert:
+    if: github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.name == 'Daily bounded development' || (github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'codex/day-') && github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Open or update one failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          title='AgentForge automation needs attention'
+          body="An autonomous run failed: $RUN_URL"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
