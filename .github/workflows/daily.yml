@@ -35,7 +35,7 @@ jobs:
           npm install --prefix frontend --no-audit --no-fund
       - name: Create short-lived GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.AGENTFORGE_APP_ID }}
           private-key: ${{ secrets.AGENTFORGE_APP_PRIVATE_KEY }}
