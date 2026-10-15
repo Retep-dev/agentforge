@@ -1,0 +1,70 @@
+name: Daily bounded development
+on:
+  workflow_dispatch:
+  # Enable only after SETUP.md approvals and branch protection are complete:
+  # schedule:
+  #   - cron: '15 8 * * *'
+  #     timezone: 'Africa/Lagos'
+permissions:
+  contents: read
+concurrency:
+  group: agentforge-daily
+  cancel-in-progress: false
+jobs:
+  develop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DAILY_BUDGET_USD: ${{ vars.DAILY_BUDGET_USD || '0.06' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install targeted check dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          npm install --prefix frontend --no-audit --no-fund
+      - name: Create short-lived GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGENTFORGE_APP_ID }}
+          private-key: ${{ secrets.AGENTFORGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Run exactly one bounded task
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python automation/daily.py
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then exit 0; fi
+          task_id=$(python -c 'import json; print(json.load(open("progress.json"))["completed"][-1]["id"])')
+          branch=$(printf 'codex/day-%02d' "$task_id")
+          git config user.name 'AgentForge Automation'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add backend/app backend/tests frontend/app docs progress.json
+          git commit -m "agentforge: complete day $task_id [AI generated]"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push origin "$branch"
+          gh pr create --head "$branch" --base main --title "AgentForge day $task_id" --body "AI-generated change by AgentForge Automation. One roadmap task; targeted checks passed. Full CI and branch protection gate integration. Contribution credit remains unverified."
+      - name: Save incomplete work for next run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-agent-attempt
+          path: |
+            failed-attempt.txt
+            backend/app/
+            backend/tests/
+            frontend/app/
+            docs/
+          retention-days: 7

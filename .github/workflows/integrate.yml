@@ -1,0 +1,46 @@
+name: Integrate verified AgentForge PR
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.AGENTFORGE_APP_ID }}
+          private-key: ${{ secrets.AGENTFORGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify PR identity and changed files, then merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls" --jq '.[0].number')
+          test -n "$pr"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" > pr.json
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$pr/files" > files.json
+          python - "$pr" <<'PY'
+          import json, re, sys
+          pr = json.load(open('pr.json'))
+          files = json.load(open('files.json'))
+          assert pr['state'] == 'open'
+          assert pr['user']['type'] == 'Bot'
+          assert pr['head']['repo']['full_name'] == pr['base']['repo']['full_name']
+          assert pr['base']['ref'] == 'main'
+          assert re.fullmatch(r'codex/day-\d{2}', pr['head']['ref'])
+          assert pr['title'] == f"AgentForge day {int(pr['head']['ref'][-2:])}"
+          names = [item['filename'] for item in files]
+          assert 'progress.json' in names and len(names) <= 3
+          assert all(name == 'progress.json' or name.startswith(('backend/app/', 'backend/tests/', 'frontend/app/', 'docs/')) for name in names)
+          assert all(item['status'] in ('added', 'modified') for item in files)
+          PY
+          gh pr merge "$pr" --squash --delete-branch
